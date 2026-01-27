@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iskolai Órarend</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Login Overlay -->
+    <div id="login-container" class="login-overlay">
+        <div class="login-box">
+            <div class="login-header">
+                <i class="fas fa-calendar-alt"></i>
+                <h1>Iskolai Órarend</h1>
+                <p>Jelentkezz be az iskolai fiókjával</p>
+            </div>
+            <form id="login-form">
+                <div class="input-group">
+                    <i class="fas fa-user"></i>
+                    <input type="text" id="username" placeholder="Felhasználónév" required autocomplete="username">
+                </div>
+                <div class="input-group">
+                    <i class="fas fa-lock"></i>
+                    <input type="password" id="password" placeholder="Jelszó" required autocomplete="current-password">
+                </div>
+                <div id="login-error" class="error-message"></div>
+                <button type="submit" class="login-btn">
+                    <i class="fas fa-sign-in-alt"></i>
+                    Bejelentkezés
+                </button>
+            </form>
+            <div class="login-footer">
+                <p><i class="fas fa-shield-alt"></i> LDAP autentikáció</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Application -->
+    <div id="main-container" class="main-container" style="display: none;">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <i class="fas fa-calendar-alt logo-icon"></i>
+                <div class="header-title">
+                    <h1>Iskolai Órarend</h1>
+                    <span id="view-subtitle" class="subtitle">Órarend megtekintése</span>
+                </div>
+            </div>
+            <div class="header-right">
+                <div class="user-info">
+                    <div class="user-avatar">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    <div class="user-details">
+                        <span id="user-display" class="user-name">Felhasználó</span>
+                        <span id="user-role" class="user-role">Vendég</span>
+                    </div>
+                </div>
+                <button id="logout-btn" class="logout-btn" title="Kijelentkezés">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Navigation -->
+        <nav class="nav-tabs">
+            <button class="nav-btn active" data-view="class">
+                <i class="fas fa-users"></i>
+                <span>Osztályok</span>
+            </button>
+            <button class="nav-btn" data-view="teacher">
+                <i class="fas fa-chalkboard-teacher"></i>
+                <span>Tanárok</span>
+            </button>
+            <button class="nav-btn" data-view="room">
+                <i class="fas fa-door-open"></i>
+                <span>Termek</span>
+            </button>
+            <button class="nav-btn" data-view="admin" data-roles="vezetoseg,rendszergaza,irodistak">
+                <i class="fas fa-cog"></i>
+                <span>Adminisztráció</span>
+            </button>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Selector Panel -->
+            <aside class="selector-panel">
+                <div class="selector-header">
+                    <h3 id="selector-title">Osztályok</h3>
+                    <button id="add-item-btn" class="add-btn" style="display: none;" title="Új hozzáadása">
+                        <i class="fas fa-plus"></i>
+                    </button>
+                </div>
+                <div class="selector-search">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="selector-search" placeholder="Keresés...">
+                </div>
+                <div id="selector-list" class="selector-list">
+                    <!-- Items loaded dynamically -->
+                </div>
+            </aside>
+
+            <!-- Timetable View -->
+            <section class="timetable-section">
+                <div class="timetable-header">
+                    <h2 id="timetable-title">Válassz osztályt az órarend megtekintéséhez</h2>
+                    <div class="timetable-actions">
+                        <button id="print-btn" class="action-btn" title="Nyomtatás">
+                            <i class="fas fa-print"></i>
+                        </button>
+                        <button id="export-btn" class="action-btn" title="Exportálás">
+                            <i class="fas fa-download"></i>
+                        </button>
+                        <button id="edit-mode-btn" class="action-btn edit-btn" style="display: none;" title="Szerkesztés">
+                            <i class="fas fa-edit"></i>
+                            <span>Szerkesztés</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="timetable-wrapper">
+                    <div class="timetable-placeholder" id="timetable-placeholder">
+                        <i class="fas fa-calendar-week"></i>
+                        <p>Válassz egy elemet a bal oldali listából</p>
+                    </div>
+                    <table id="timetable" class="timetable" style="display: none;">
+                        <thead>
+                            <tr>
+                                <th class="time-column">Óra</th>
+                                <th>Hétfő</th>
+                                <th>Kedd</th>
+                                <th>Szerda</th>
+                                <th>Csütörtök</th>
+                                <th>Péntek</th>
+                            </tr>
+                        </thead>
+                        <tbody id="timetable-body">
+                            <!-- Timetable rows loaded dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </main>
+
+        <!-- Admin Section (hidden by default) -->
+        <section id="admin-section" class="admin-section" style="display: none;">
+            <div class="admin-tabs">
+                <button class="admin-tab-btn active" data-admin-tab="subjects">
+                    <i class="fas fa-book"></i> Tantárgyak
+                </button>
+                <button class="admin-tab-btn" data-admin-tab="teachers">
+                    <i class="fas fa-chalkboard-teacher"></i> Tanárok
+                </button>
+                <button class="admin-tab-btn" data-admin-tab="classes">
+                    <i class="fas fa-users"></i> Osztályok
+                </button>
+                <button class="admin-tab-btn" data-admin-tab="rooms">
+                    <i class="fas fa-door-open"></i> Termek
+                </button>
+                <button class="admin-tab-btn" data-admin-tab="periods">
+                    <i class="fas fa-clock"></i> Csengetési rend
+                </button>
+            </div>
+            <div class="admin-content">
+                <!-- Subjects Tab -->
+                <div id="admin-subjects" class="admin-tab-content active">
+                    <div class="admin-header">
+                        <h3>Tantárgyak kezelése</h3>
+                        <button class="add-btn" onclick="showSubjectModal()">
+                            <i class="fas fa-plus"></i> Új tantárgy
+                        </button>
+                    </div>
+                    <div id="subjects-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Teachers Tab -->
+                <div id="admin-teachers" class="admin-tab-content">
+                    <div class="admin-header">
+                        <h3>Tanárok kezelése</h3>
+                        <button class="add-btn" onclick="showTeacherModal()">
+                            <i class="fas fa-plus"></i> Új tanár
+                        </button>
+                    </div>
+                    <div id="teachers-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Classes Tab -->
+                <div id="admin-classes" class="admin-tab-content">
+                    <div class="admin-header">
+                        <h3>Osztályok kezelése</h3>
+                        <button class="add-btn" onclick="showClassModal()">
+                            <i class="fas fa-plus"></i> Új osztály
+                        </button>
+                    </div>
+                    <div id="classes-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Rooms Tab -->
+                <div id="admin-rooms" class="admin-tab-content">
+                    <div class="admin-header">
+                        <h3>Termek kezelése</h3>
+                        <button class="add-btn" onclick="showRoomModal()">
+                            <i class="fas fa-plus"></i> Új terem
+                        </button>
+                    </div>
+                    <div id="rooms-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Periods Tab -->
+                <div id="admin-periods" class="admin-tab-content">
+                    <div class="admin-header">
+                        <h3>Csengetési rend</h3>
+                        <button class="add-btn" onclick="showPeriodModal()">
+                            <i class="fas fa-plus"></i> Új időpont
+                        </button>
+                    </div>
+                    <div id="periods-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Modals -->
+    <!-- Lesson Modal -->
+    <div id="lesson-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="lesson-modal-title">Óra szerkesztése</h3>
+                <button class="close-btn" onclick="closeModal('lesson-modal')">&times;</button>
+            </div>
+            <form id="lesson-form">
+                <input type="hidden" id="lesson-id">
+                <input type="hidden" id="lesson-day">
+                <input type="hidden" id="lesson-period">
+                
+                <div class="form-group">
+                    <label for="lesson-subject">Tantárgy</label>
+                    <select id="lesson-subject" required>
+                        <!-- Options loaded dynamically -->
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="lesson-teacher">Tanár</label>
+                    <select id="lesson-teacher" required>
+                        <!-- Options loaded dynamically -->
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="lesson-room">Terem</label>
+                    <select id="lesson-room" required>
+                        <!-- Options loaded dynamically -->
+                    </select>
+                </div>
+                
+                <div class="form-group">
+                    <label for="lesson-note">Megjegyzés (opcionális)</label>
+                    <input type="text" id="lesson-note" placeholder="pl. A/B hét">
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('lesson-modal')">Mégse</button>
+                    <button type="button" id="delete-lesson-btn" class="btn btn-danger" style="display: none;" onclick="deleteLesson()">
+                        <i class="fas fa-trash"></i> Törlés
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Subject Modal -->
+    <div id="subject-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="subject-modal-title">Új tantárgy</h3>
+                <button class="close-btn" onclick="closeModal('subject-modal')">&times;</button>
+            </div>
+            <form id="subject-form">
+                <input type="hidden" id="subject-id">
+                
+                <div class="form-group">
+                    <label for="subject-name">Tantárgy neve</label>
+                    <input type="text" id="subject-name" required placeholder="pl. Matematika">
+                </div>
+                
+                <div class="form-group">
+                    <label for="subject-shortname">Rövidítés</label>
+                    <input type="text" id="subject-shortname" placeholder="pl. Matek">
+                </div>
+                
+                <div class="form-group">
+                    <label for="subject-color">Szín</label>
+                    <input type="color" id="subject-color" value="#3498db">
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('subject-modal')">Mégse</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Teacher Modal -->
+    <div id="teacher-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="teacher-modal-title">Új tanár</h3>
+                <button class="close-btn" onclick="closeModal('teacher-modal')">&times;</button>
+            </div>
+            <form id="teacher-form">
+                <input type="hidden" id="teacher-id">
+                
+                <div class="form-group">
+                    <label for="teacher-name">Tanár neve</label>
+                    <input type="text" id="teacher-name" required placeholder="pl. Kovács Mária">
+                </div>
+                
+                <div class="form-group">
+                    <label for="teacher-shortname">Rövidítés</label>
+                    <input type="text" id="teacher-shortname" placeholder="pl. KM">
+                </div>
+                
+                <div class="form-group">
+                    <label for="teacher-email">Email</label>
+                    <input type="email" id="teacher-email" placeholder="pl. kovacs.maria@iskola.hu">
+                </div>
+                
+                <div class="form-group">
+                    <label for="teacher-subjects">Tantárgyak</label>
+                    <input type="text" id="teacher-subjects" placeholder="pl. Matematika, Fizika">
+                </div>
+                
+                <div class="form-group">
+                    <label for="teacher-color">Szín</label>
+                    <input type="color" id="teacher-color" value="#3498db">
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('teacher-modal')">Mégse</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Class Modal -->
+    <div id="class-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="class-modal-title">Új osztály</h3>
+                <button class="close-btn" onclick="closeModal('class-modal')">&times;</button>
+            </div>
+            <form id="class-form">
+                <input type="hidden" id="class-id">
+                
+                <div class="form-group">
+                    <label for="class-name">Osztály neve</label>
+                    <input type="text" id="class-name" required placeholder="pl. 9.A">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="class-grade">Évfolyam</label>
+                        <input type="number" id="class-grade" min="1" max="13" placeholder="pl. 9">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="class-section">Tagozat</label>
+                        <input type="text" id="class-section" placeholder="pl. A">
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="class-students">Létszám</label>
+                    <input type="number" id="class-students" min="0" placeholder="pl. 30">
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('class-modal')">Mégse</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Room Modal -->
+    <div id="room-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="room-modal-title">Új terem</h3>
+                <button class="close-btn" onclick="closeModal('room-modal')">&times;</button>
+            </div>
+            <form id="room-form">
+                <input type="hidden" id="room-id">
+                
+                <div class="form-group">
+                    <label for="room-name">Terem neve/száma</label>
+                    <input type="text" id="room-name" required placeholder="pl. 101">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="room-building">Épület</label>
+                        <input type="text" id="room-building" placeholder="pl. A">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="room-floor">Emelet</label>
+                        <input type="number" id="room-floor" min="0" placeholder="pl. 1">
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="room-capacity">Férőhely</label>
+                        <input type="number" id="room-capacity" min="1" placeholder="pl. 30">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="room-type">Típus</label>
+                        <select id="room-type">
+                            <option value="classroom">Tanterem</option>
+                            <option value="computer">Számítógépes terem</option>
+                            <option value="lab">Labor</option>
+                            <option value="gym">Tornaterem</option>
+                            <option value="library">Könyvtár</option>
+                            <option value="other">Egyéb</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('room-modal')">Mégse</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Period Modal -->
+    <div id="period-modal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="period-modal-title">Új időpont</h3>
+                <button class="close-btn" onclick="closeModal('period-modal')">&times;</button>
+            </div>
+            <form id="period-form">
+                <input type="hidden" id="period-id">
+                
+                <div class="form-group">
+                    <label for="period-number">Óra száma</label>
+                    <input type="number" id="period-number" required min="0" placeholder="pl. 1">
+                </div>
+                
+                <div class="form-group">
+                    <label for="period-name">Megnevezés</label>
+                    <input type="text" id="period-name" placeholder="pl. 1. óra">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="period-start">Kezdés</label>
+                        <input type="time" id="period-start" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="period-end">Vége</label>
+                        <input type="time" id="period-end" required>
+                    </div>
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('period-modal')">Mégse</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="script.js"></script>
+</body>
+</html>

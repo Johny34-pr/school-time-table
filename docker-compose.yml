@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  school-timetable:
+    build: .
+    container_name: school-timetable
+    ports:
+      - "3001:3001"
+    volumes:
+      - timetable-data:/app/server/data
+    environment:
+      - NODE_ENV=production
+      - LDAP_SERVER=10.204.131.188
+      - LDAP_PORT=636
+      - LDAP_BASE_DN=dc=suli,dc=local
+    restart: unless-stopped
+    networks:
+      - school-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  timetable-data:
+    driver: local
+
+networks:
+  school-network:
+    driver: bridge
