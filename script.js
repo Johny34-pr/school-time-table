@@ -35,6 +35,7 @@ let authToken = null;
 let currentView = 'class';
 let selectedItem = null;
 let editMode = false;
+let linkedTeacherId = null; // Tanár párosítás
 
 // Cache
 let classesCache = [];
@@ -93,11 +94,12 @@ async function validateToken(token, username) {
     }
 }
 
-function saveSession(user, groups, token) {
+function saveSession(user, groups, token, teacherId = null) {
     const session = {
         user,
         groups,
         token,
+        linkedTeacherId: teacherId,
         expiry: Date.now() + TOKEN_EXPIRY,
         savedAt: new Date().toISOString()
     };
@@ -120,10 +122,20 @@ function loadSession() {
     }
 }
 
+function saveLinkedTeacher(teacherId) {
+    const session = loadSession();
+    if (session) {
+        session.linkedTeacherId = teacherId;
+        localStorage.setItem('timetableSession', JSON.stringify(session));
+    }
+    linkedTeacherId = teacherId;
+}
+
 function clearSession() {
     localStorage.removeItem('timetableSession');
     currentUser = null;
     authToken = null;
+    linkedTeacherId = null;
 }
 
 function hasPermission(allowedRoles) {
@@ -137,6 +149,21 @@ function canEdit() {
 
 function isAdmin() {
     return hasPermission(ROLES.admin);
+}
+
+function isTeacherOnly() {
+    // Csak 'tanarok' csoportban van, és nem admin
+    return hasPermission(['tanarok']) && !isAdmin();
+}
+
+function canEditLesson(lesson) {
+    // Admin és irodista mindent szerkeszthet
+    if (isAdmin() || hasPermission(['irodistak'])) return true;
+    // Tanár csak a saját óráit szerkesztheti
+    if (isTeacherOnly() && linkedTeacherId) {
+        return lesson.teacherId === linkedTeacherId;
+    }
+    return canEdit();
 }
 
 // ===========================
@@ -187,6 +214,7 @@ async function checkSession() {
         if (validation.valid) {
             currentUser = { ...session.user, groups: session.groups };
             authToken = session.token;
+            linkedTeacherId = session.linkedTeacherId || null;
             showDashboard();
             return;
         }
@@ -222,8 +250,108 @@ async function showDashboard() {
     // Adatok betöltése
     await loadAllData();
     
+    // Tanár párosítás ellenőrzése (csak tanárok csoportnak)
+    if (isTeacherOnly() && !linkedTeacherId) {
+        await checkTeacherLinking();
+    }
+    
     // Alapértelmezett nézet
-    switchView('class');
+    if (isTeacherOnly() && linkedTeacherId) {
+        // Tanár automatikusan a saját órarendjét látja
+        switchView('teacher');
+        selectItem(linkedTeacherId);
+    } else {
+        switchView('class');
+    }
+}
+
+async function checkTeacherLinking() {
+    const username = currentUser.username?.toLowerCase();
+    const displayName = currentUser.displayName || currentUser.username;
+    
+    // 1. Először LDAP username alapján keresünk (ez a legmegbízhatóbb)
+    let matchingTeacher = teachersCache.find(t => 
+        t.ldapUsername && t.ldapUsername.toLowerCase() === username
+    );
+    
+    // 2. Ha nincs LDAP egyezés, próbálkozunk a displayName-mel
+    if (!matchingTeacher) {
+        matchingTeacher = teachersCache.find(t => 
+            t.name.toLowerCase() === displayName.toLowerCase()
+        );
+    }
+    
+    if (matchingTeacher) {
+        // Automatikus párosítás
+        linkedTeacherId = matchingTeacher.id;
+        saveLinkedTeacher(matchingTeacher.id);
+        showToast(`Bejelentkezve mint: ${matchingTeacher.name}`, 'success');
+    } else {
+        // Megjelenítjük a tanár kiválasztás modált
+        showTeacherSelectModal();
+    }
+}
+
+function showTeacherSelectModal() {
+    const modal = document.getElementById('teacher-select-modal');
+    const list = document.getElementById('teacher-select-list');
+    const searchInput = document.getElementById('teacher-select-search');
+    
+    // Keresés reset
+    if (searchInput) searchInput.value = '';
+    
+    // Tanár lista feltöltése
+    list.innerHTML = teachersCache.map(t => `
+        <div class="teacher-select-item" data-id="${t.id}" data-name="${t.name.toLowerCase()}" onclick="selectTeacherIdentity('${t.id}')">
+            <div class="item-icon">${t.shortName || t.name.substring(0, 2)}</div>
+            <div class="item-info">
+                <div class="item-name">${t.name}</div>
+                <div class="item-detail">${t.subjects || ''}</div>
+            </div>
+        </div>
+    `).join('');
+    
+    modal.classList.add('active');
+}
+
+function filterTeacherSelectList() {
+    const searchInput = document.getElementById('teacher-select-search');
+    const search = searchInput.value.toLowerCase();
+    const items = document.querySelectorAll('#teacher-select-list .teacher-select-item');
+    
+    items.forEach(item => {
+        const name = item.dataset.name || '';
+        if (name.includes(search)) {
+            item.style.display = 'flex';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+function selectTeacherIdentity(teacherId) {
+    const teacher = teachersCache.find(t => t.id === teacherId);
+    if (teacher) {
+        linkedTeacherId = teacherId;
+        saveLinkedTeacher(teacherId);
+        closeModal('teacher-select-modal');
+        updateLinkedTeacherDisplay();
+        showToast(`Bejelentkezve mint: ${teacher.name}`, 'success');
+        
+        // Automatikusan a saját órarendre ugrunk
+        switchView('teacher');
+        selectItem(teacherId);
+    }
+}
+
+function unlinkTeacher() {
+    linkedTeacherId = null;
+    const session = loadSession();
+    if (session) {
+        session.linkedTeacherId = null;
+        localStorage.setItem('timetableSession', JSON.stringify(session));
+    }
+    showToast('Tanár párosítás megszüntetve', 'info');
 }
 
 function setupPermissions() {
@@ -237,6 +365,30 @@ function setupPermissions() {
     const editBtn = document.getElementById('edit-mode-btn');
     if (editBtn) {
         editBtn.style.display = canEdit() ? 'flex' : 'none';
+    }
+    
+    // Tanár váltás gomb
+    const changeTeacherBtn = document.getElementById('change-teacher-btn');
+    if (changeTeacherBtn) {
+        changeTeacherBtn.style.display = isTeacherOnly() ? 'flex' : 'none';
+    }
+    
+    // Linked teacher display frissítése
+    updateLinkedTeacherDisplay();
+}
+
+function updateLinkedTeacherDisplay() {
+    const linkedDisplay = document.getElementById('linked-teacher-display');
+    const linkedName = document.getElementById('linked-teacher-name');
+    
+    if (linkedTeacherId && isTeacherOnly()) {
+        const teacher = teachersCache.find(t => t.id === linkedTeacherId);
+        if (teacher && linkedDisplay && linkedName) {
+            linkedName.textContent = teacher.name;
+            linkedDisplay.style.display = 'flex';
+        }
+    } else if (linkedDisplay) {
+        linkedDisplay.style.display = 'none';
     }
 }
 
@@ -357,8 +509,13 @@ function loadSelectorList() {
                 id: t.id,
                 name: t.name,
                 detail: t.subjects || '',
-                icon: t.shortName || t.name.substring(0, 2)
+                icon: t.shortName || t.name.substring(0, 2),
+                isLinked: t.id === linkedTeacherId
             }));
+            // Tanár esetén csak a saját profilt mutatjuk, ha van párosítás
+            if (isTeacherOnly() && linkedTeacherId) {
+                items = items.filter(item => item.id === linkedTeacherId);
+            }
             break;
         case 'room':
             items = roomsCache.map(r => ({
@@ -379,7 +536,7 @@ function loadSelectorList() {
     }
     
     list.innerHTML = items.map(item => `
-        <div class="selector-item ${selectedItem === item.id ? 'active' : ''}" 
+        <div class="selector-item ${selectedItem === item.id ? 'active' : ''} ${item.isLinked ? 'linked' : ''}" 
              data-id="${item.id}" 
              onclick="selectItem('${item.id}')">
             <div class="item-icon">${item.icon.substring(0, 3)}</div>
@@ -387,6 +544,7 @@ function loadSelectorList() {
                 <div class="item-name">${item.name}</div>
                 <div class="item-detail">${item.detail}</div>
             </div>
+            ${item.isLinked ? '<i class="fas fa-check-circle linked-icon"></i>' : ''}
         </div>
     `).join('');
 }
@@ -470,24 +628,29 @@ function renderTimetable() {
             if (lessons.length > 0) {
                 const lesson = lessons[0];
                 const color = lesson.subjectColor || '#3498db';
+                const canEditThis = canEditLesson(lesson);
+                const isOwnLesson = linkedTeacherId && lesson.teacherId === linkedTeacherId;
                 
                 html += `
                     <td>
-                        <div class="lesson-cell" 
-                             style="background: ${color}"
-                             onclick="openLessonModal(${day}, '${period.id}', '${lesson.id}')"
-                             title="${lesson.subjectName}">
+                        <div class="lesson-cell ${isOwnLesson ? 'own-lesson' : ''} ${!canEditThis ? 'readonly' : ''}" 
+                             style="background: ${color}${!canEditThis ? '; cursor: default;' : ''}"
+                             ${canEditThis ? `onclick="openLessonModal(${day}, '${period.id}', '${lesson.id}')"` : ''}
+                             title="${lesson.subjectName}${isOwnLesson ? ' (Saját óra)' : ''}">
                             <div class="subject-name">${lesson.subjectShortName || lesson.subjectName}</div>
                             <div class="teacher-name">${lesson.teacherShortName || lesson.teacherName}</div>
                             <div class="room-name">${lesson.roomName}</div>
                             ${lesson.note ? `<div class="lesson-note">${lesson.note}</div>` : ''}
+                            ${isOwnLesson ? '<div class="own-lesson-badge"><i class="fas fa-user"></i></div>' : ''}
                         </div>
                     </td>
                 `;
             } else {
+                // Tanár csak a tanár nézetben tud új órát hozzáadni a saját órarendjéhez
+                const canAddHere = editMode && canEdit() && (!isTeacherOnly() || (currentView === 'teacher' && selectedItem === linkedTeacherId));
                 html += `
-                    <td class="empty-cell ${editMode ? 'edit-mode' : ''}" 
-                        ${editMode && canEdit() ? `onclick="openLessonModal(${day}, '${period.id}')"` : ''}>
+                    <td class="empty-cell ${editMode && canAddHere ? 'edit-mode' : ''}" 
+                        ${canAddHere ? `onclick="openLessonModal(${day}, '${period.id}')"` : ''}>
                     </td>
                 `;
             }
@@ -522,19 +685,25 @@ function toggleEditMode() {
 // ===========================
 
 function openLessonModal(day, periodId, lessonId = null) {
-    if (!canEdit() && lessonId) {
-        // Csak megtekintés
+    // Ellenőrizzük az általános szerkesztési jogot
+    if (!canEdit()) {
         return;
     }
     
-    if (!canEdit()) {
-        return;
+    // Ha van lessonId, ellenőrizzük, hogy szerkesztheti-e
+    if (lessonId) {
+        const lesson = currentTimetable.find(l => l.id === lessonId);
+        if (lesson && !canEditLesson(lesson)) {
+            showToast('Csak a saját óráidat szerkesztheted', 'warning');
+            return;
+        }
     }
     
     const modal = document.getElementById('lesson-modal');
     const form = document.getElementById('lesson-form');
     const title = document.getElementById('lesson-modal-title');
     const deleteBtn = document.getElementById('delete-lesson-btn');
+    const teacherSelect = document.getElementById('lesson-teacher');
     
     // Form reset
     form.reset();
@@ -561,6 +730,20 @@ function openLessonModal(day, periodId, lessonId = null) {
         // Új óra
         title.textContent = 'Új óra hozzáadása';
         deleteBtn.style.display = 'none';
+        
+        // Ha tanár, automatikusan saját magát válasszuk ki
+        if (isTeacherOnly() && linkedTeacherId) {
+            document.getElementById('lesson-teacher').value = linkedTeacherId;
+        }
+    }
+    
+    // Tanár nem változtathatja meg a tanárt (csak saját maga lehet)
+    if (isTeacherOnly() && linkedTeacherId) {
+        teacherSelect.disabled = true;
+        teacherSelect.title = 'Csak a saját óráidat szerkesztheted';
+    } else {
+        teacherSelect.disabled = false;
+        teacherSelect.title = '';
     }
     
     modal.classList.add('active');
@@ -652,6 +835,7 @@ function loadAdminData() {
     loadClassesList();
     loadRoomsList();
     loadPeriodsList();
+    loadSubstitutions();
 }
 
 function switchAdminTab(tab) {
@@ -662,6 +846,11 @@ function switchAdminTab(tab) {
     document.querySelectorAll('.admin-tab-content').forEach(content => {
         content.classList.toggle('active', content.id === `admin-${tab}`);
     });
+    
+    // Ha a helyettesítések fülre váltunk, frissítsük a listát
+    if (tab === 'substitutions') {
+        loadSubstitutions();
+    }
 }
 
 // Tantárgyak
@@ -760,8 +949,15 @@ function loadTeachersList() {
         <div class="admin-item">
             <div class="item-color" style="background: ${t.color || '#3498db'}"></div>
             <div class="item-content">
-                <div class="item-title">${t.name}</div>
-                <div class="item-subtitle">${t.shortName || ''} - ${t.subjects || ''}</div>
+                <div class="item-title">
+                    ${t.name}
+                    ${t.ldapUsername ? `<span class="ldap-badge" title="LDAP: ${t.ldapUsername}"><i class="fas fa-user-tag"></i> ${t.ldapUsername}</span>` : ''}
+                </div>
+                <div class="item-subtitle">
+                    ${t.shortName ? `<strong>${t.shortName}</strong> | ` : ''}
+                    ${t.subjects ? `<i class="fas fa-book"></i> ${t.subjects}` : ''}
+                    ${t.classes ? ` | <i class="fas fa-users"></i> ${t.classes}` : ''}
+                </div>
             </div>
             <div class="item-actions">
                 <button class="edit-btn" onclick="editTeacher('${t.id}')" title="Szerkesztés">
@@ -783,22 +979,69 @@ function showTeacherModal(id = null) {
     form.reset();
     document.getElementById('teacher-id').value = id || '';
     
+    // Tantárgyak checkbox lista feltöltése
+    populateTeacherSubjectsList();
+    // Osztályok checkbox lista feltöltése
+    populateTeacherClassesList();
+    
     if (id) {
         title.textContent = 'Tanár szerkesztése';
         const teacher = teachersCache.find(t => t.id === id);
         if (teacher) {
             document.getElementById('teacher-name').value = teacher.name;
             document.getElementById('teacher-shortname').value = teacher.shortName || '';
+            document.getElementById('teacher-ldap').value = teacher.ldapUsername || '';
             document.getElementById('teacher-email').value = teacher.email || '';
-            document.getElementById('teacher-subjects').value = teacher.subjects || '';
             document.getElementById('teacher-color').value = teacher.color || '#3498db';
+            
+            // Tantárgyak kijelölése
+            const teacherSubjects = teacher.subjects ? teacher.subjects.split(',').map(s => s.trim()) : [];
+            document.querySelectorAll('#teacher-subjects-list input[type="checkbox"]').forEach(cb => {
+                cb.checked = teacherSubjects.includes(cb.dataset.name);
+            });
+            
+            // Osztályok kijelölése
+            const teacherClasses = teacher.classes ? teacher.classes.split(',').map(c => c.trim()) : [];
+            document.querySelectorAll('#teacher-classes-list input[type="checkbox"]').forEach(cb => {
+                cb.checked = teacherClasses.includes(cb.dataset.name);
+            });
         }
     } else {
         title.textContent = 'Új tanár';
         document.getElementById('teacher-color').value = '#3498db';
+        document.getElementById('teacher-ldap').value = '';
     }
     
     modal.classList.add('active');
+}
+
+function populateTeacherSubjectsList() {
+    const list = document.getElementById('teacher-subjects-list');
+    if (subjectsCache.length === 0) {
+        list.innerHTML = '<div class="checkbox-list-empty">Nincs tantárgy létrehozva</div>';
+        return;
+    }
+    list.innerHTML = subjectsCache.map(s => `
+        <label class="checkbox-list-item">
+            <input type="checkbox" data-id="${s.id}" data-name="${s.name}">
+            <span class="item-color" style="background: ${s.color}"></span>
+            <span>${s.name}</span>
+        </label>
+    `).join('');
+}
+
+function populateTeacherClassesList() {
+    const list = document.getElementById('teacher-classes-list');
+    if (classesCache.length === 0) {
+        list.innerHTML = '<div class="checkbox-list-empty">Nincs osztály létrehozva</div>';
+        return;
+    }
+    list.innerHTML = classesCache.map(c => `
+        <label class="checkbox-list-item">
+            <input type="checkbox" data-id="${c.id}" data-name="${c.name}">
+            <span>${c.name}</span>
+        </label>
+    `).join('');
 }
 
 function editTeacher(id) {
@@ -809,11 +1052,26 @@ async function handleTeacherSubmit(e) {
     e.preventDefault();
     
     const id = document.getElementById('teacher-id').value;
+    
+    // Kijelölt tantárgyak összegyűjtése
+    const selectedSubjects = [];
+    document.querySelectorAll('#teacher-subjects-list input[type="checkbox"]:checked').forEach(cb => {
+        selectedSubjects.push(cb.dataset.name);
+    });
+    
+    // Kijelölt osztályok összegyűjtése
+    const selectedClasses = [];
+    document.querySelectorAll('#teacher-classes-list input[type="checkbox"]:checked').forEach(cb => {
+        selectedClasses.push(cb.dataset.name);
+    });
+    
     const data = {
         name: document.getElementById('teacher-name').value,
         shortName: document.getElementById('teacher-shortname').value,
+        ldapUsername: document.getElementById('teacher-ldap').value.trim() || null,
         email: document.getElementById('teacher-email').value,
-        subjects: document.getElementById('teacher-subjects').value,
+        subjects: selectedSubjects.join(', '),
+        classes: selectedClasses.join(', '),
         color: document.getElementById('teacher-color').value
     };
     
@@ -1132,6 +1390,226 @@ async function deletePeriod(id) {
 }
 
 // ===========================
+// Helyettesítések kezelése
+// ===========================
+
+let substitutionsCache = [];
+
+async function loadSubstitutions() {
+    const dateFilter = document.getElementById('substitution-date-filter');
+    const date = dateFilter?.value || new Date().toISOString().split('T')[0];
+    
+    try {
+        substitutionsCache = await fetchAPI(`/api/substitutions?date=${date}`);
+        renderSubstitutionsList();
+    } catch (error) {
+        console.error('[SUBSTITUTIONS] Hiba:', error);
+        showToast('Hiba a helyettesítések betöltésekor', 'error');
+    }
+}
+
+function renderSubstitutionsList() {
+    const list = document.getElementById('substitutions-list');
+    
+    if (!substitutionsCache || substitutionsCache.length === 0) {
+        list.innerHTML = `
+            <div class="no-substitutions">
+                <i class="fas fa-calendar-check"></i>
+                <p>Nincs helyettesítés ezen a napon</p>
+            </div>
+        `;
+        return;
+    }
+    
+    list.innerHTML = substitutionsCache.map(s => {
+        const period = periodsCache.find(p => p.id === s.periodId);
+        const originalTeacher = teachersCache.find(t => t.id === s.originalTeacherId);
+        const substituteTeacher = teachersCache.find(t => t.id === s.substituteTeacherId);
+        const subject = subjectsCache.find(sub => sub.id === s.subjectId);
+        const room = roomsCache.find(r => r.id === s.roomId);
+        const cls = classesCache.find(c => c.id === s.classId);
+        
+        return `
+            <div class="substitution-item ${s.cancelled ? 'cancelled' : ''}">
+                <div class="substitution-info">
+                    <div class="substitution-header">
+                        <span class="substitution-date">${formatDate(s.date)}</span>
+                        <span class="substitution-period">${period?.number || '?'}. óra (${period?.startTime || ''})</span>
+                        <span class="substitution-class">${cls?.name || '?'}</span>
+                        ${s.cancelled ? '<span class="substitution-cancelled-badge">ELMARAD</span>' : ''}
+                    </div>
+                    <div class="substitution-details">
+                        <div class="substitution-teachers">
+                            <span class="original">${originalTeacher?.name || '?'}</span>
+                            <span class="arrow">→</span>
+                            <span class="substitute">${s.cancelled ? 'Elmarad' : (substituteTeacher?.name || 'Nincs megadva')}</span>
+                        </div>
+                        ${subject ? `<span><i class="fas fa-book"></i> ${subject.name}</span>` : ''}
+                        ${room ? `<span><i class="fas fa-door-open"></i> ${room.name}</span>` : ''}
+                        ${s.reason ? `<span class="substitution-reason"><i class="fas fa-info-circle"></i> ${s.reason}</span>` : ''}
+                    </div>
+                </div>
+                <div class="substitution-actions">
+                    <button class="edit-btn" onclick="editSubstitution('${s.id}')" title="Szerkesztés">
+                        <i class="fas fa-edit"></i>
+                    </button>
+                    <button class="delete-btn" onclick="deleteSubstitutionItem('${s.id}')" title="Törlés">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function formatDate(dateStr) {
+    const date = new Date(dateStr);
+    const days = ['Vas', 'Hét', 'Kedd', 'Szer', 'Csüt', 'Pén', 'Szom'];
+    const months = ['jan', 'feb', 'már', 'ápr', 'máj', 'jún', 'júl', 'aug', 'szep', 'okt', 'nov', 'dec'];
+    return `${date.getFullYear()}. ${months[date.getMonth()]}. ${date.getDate()}. (${days[date.getDay()]})`;
+}
+
+function showSubstitutionModal(id = null) {
+    const modal = document.getElementById('substitution-modal');
+    const form = document.getElementById('substitution-form');
+    const title = document.getElementById('substitution-modal-title');
+    const deleteBtn = document.getElementById('delete-substitution-btn');
+    
+    form.reset();
+    document.getElementById('substitution-id').value = id || '';
+    
+    // Dropdown-ok feltöltése
+    populateSubstitutionSelects();
+    
+    if (id) {
+        title.textContent = 'Helyettesítés szerkesztése';
+        deleteBtn.style.display = 'block';
+        
+        const sub = substitutionsCache.find(s => s.id === id);
+        if (sub) {
+            document.getElementById('substitution-date').value = sub.date;
+            document.getElementById('substitution-period').value = sub.periodId;
+            document.getElementById('substitution-class').value = sub.classId;
+            document.getElementById('substitution-original-teacher').value = sub.originalTeacherId;
+            document.getElementById('substitution-substitute-teacher').value = sub.substituteTeacherId || '';
+            document.getElementById('substitution-subject').value = sub.subjectId || '';
+            document.getElementById('substitution-room').value = sub.roomId || '';
+            document.getElementById('substitution-reason').value = sub.reason || '';
+            document.getElementById('substitution-note').value = sub.note || '';
+            document.getElementById('substitution-cancelled').checked = sub.cancelled === 1;
+        }
+    } else {
+        title.textContent = 'Új helyettesítés';
+        deleteBtn.style.display = 'none';
+        
+        // Mai dátum alapértelmezettként
+        const today = new Date().toISOString().split('T')[0];
+        document.getElementById('substitution-date').value = today;
+    }
+    
+    modal.classList.add('active');
+}
+
+function populateSubstitutionSelects() {
+    // Órák
+    const periodSelect = document.getElementById('substitution-period');
+    periodSelect.innerHTML = periodsCache.map(p => 
+        `<option value="${p.id}">${p.number}. óra (${p.startTime} - ${p.endTime})</option>`
+    ).join('');
+    
+    // Osztályok
+    const classSelect = document.getElementById('substitution-class');
+    classSelect.innerHTML = classesCache.map(c => 
+        `<option value="${c.id}">${c.name}</option>`
+    ).join('');
+    
+    // Tanárok
+    const origTeacherSelect = document.getElementById('substitution-original-teacher');
+    const subTeacherSelect = document.getElementById('substitution-substitute-teacher');
+    
+    const teacherOptions = teachersCache.map(t => 
+        `<option value="${t.id}">${t.name}</option>`
+    ).join('');
+    
+    origTeacherSelect.innerHTML = teacherOptions;
+    subTeacherSelect.innerHTML = '<option value="">-- Elmarad --</option>' + teacherOptions;
+    
+    // Tantárgyak
+    const subjectSelect = document.getElementById('substitution-subject');
+    subjectSelect.innerHTML = '<option value="">-- Eredeti --</option>' + 
+        subjectsCache.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    
+    // Termek
+    const roomSelect = document.getElementById('substitution-room');
+    roomSelect.innerHTML = '<option value="">-- Eredeti --</option>' + 
+        roomsCache.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+}
+
+function editSubstitution(id) {
+    showSubstitutionModal(id);
+}
+
+async function handleSubstitutionSubmit(e) {
+    e.preventDefault();
+    
+    const id = document.getElementById('substitution-id').value;
+    const data = {
+        date: document.getElementById('substitution-date').value,
+        periodId: document.getElementById('substitution-period').value,
+        classId: document.getElementById('substitution-class').value,
+        originalTeacherId: document.getElementById('substitution-original-teacher').value,
+        substituteTeacherId: document.getElementById('substitution-substitute-teacher').value || null,
+        subjectId: document.getElementById('substitution-subject').value || null,
+        roomId: document.getElementById('substitution-room').value || null,
+        reason: document.getElementById('substitution-reason').value || null,
+        note: document.getElementById('substitution-note').value || null,
+        cancelled: document.getElementById('substitution-cancelled').checked ? 1 : 0
+    };
+    
+    try {
+        if (id) {
+            await fetchAPI(`/api/substitutions/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+        } else {
+            await fetchAPI('/api/substitutions', { method: 'POST', body: JSON.stringify(data) });
+        }
+        
+        await loadSubstitutions();
+        closeModal('substitution-modal');
+        showToast('Helyettesítés mentve', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function deleteSubstitution() {
+    const id = document.getElementById('substitution-id').value;
+    if (!id) return;
+    
+    if (!confirm('Biztosan törölni szeretnéd ezt a helyettesítést?')) return;
+    
+    try {
+        await fetchAPI(`/api/substitutions/${id}`, { method: 'DELETE' });
+        await loadSubstitutions();
+        closeModal('substitution-modal');
+        showToast('Helyettesítés törölve', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+async function deleteSubstitutionItem(id) {
+    if (!confirm('Biztosan törölni szeretnéd ezt a helyettesítést?')) return;
+    
+    try {
+        await fetchAPI(`/api/substitutions/${id}`, { method: 'DELETE' });
+        await loadSubstitutions();
+        showToast('Helyettesítés törölve', 'success');
+    } catch (error) {
+        showToast(error.message, 'error');
+    }
+}
+
+// ===========================
 // Modal kezelés
 // ===========================
 
@@ -1226,6 +1704,16 @@ document.addEventListener('DOMContentLoaded', function() {
     // Logout
     document.getElementById('logout-btn').addEventListener('click', handleLogout);
     
+    // Tanár váltás gomb
+    const changeTeacherBtn = document.getElementById('change-teacher-btn');
+    if (changeTeacherBtn) {
+        changeTeacherBtn.addEventListener('click', () => {
+            if (isTeacherOnly()) {
+                showTeacherSelectModal();
+            }
+        });
+    }
+    
     // Navigáció
     document.querySelectorAll('.nav-btn').forEach(btn => {
         btn.addEventListener('click', () => switchView(btn.dataset.view));
@@ -1253,21 +1741,30 @@ document.addEventListener('DOMContentLoaded', function() {
     document.getElementById('class-form').addEventListener('submit', handleClassSubmit);
     document.getElementById('room-form').addEventListener('submit', handleRoomSubmit);
     document.getElementById('period-form').addEventListener('submit', handlePeriodSubmit);
+    document.getElementById('substitution-form').addEventListener('submit', handleSubstitutionSubmit);
     
-    // Modal bezárás kívül kattintásra
+    // Helyettesítés dátumszűrő inicializálása mai dátummal
+    const substitutionDateFilter = document.getElementById('substitution-date-filter');
+    if (substitutionDateFilter) {
+        substitutionDateFilter.value = new Date().toISOString().split('T')[0];
+    }
+    
+    // Modal bezárás kívül kattintásra (kivéve a tanár kiválasztó modált, amit nem lehet így bezárni)
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
+            if (e.target === modal && modal.id !== 'teacher-select-modal') {
                 modal.classList.remove('active');
             }
         });
     });
     
-    // ESC billentyű
+    // ESC billentyű (kivéve a tanár kiválasztó modált)
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal.active').forEach(modal => {
-                modal.classList.remove('active');
+                if (modal.id !== 'teacher-select-modal') {
+                    modal.classList.remove('active');
+                }
             });
         }
     });

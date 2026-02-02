@@ -454,6 +454,34 @@ async function handleAPI(req, res, pathname) {
         return;
     }
 
+    // Helyettesítések - publikus lekérdezés
+    if (pathname === '/api/substitutions' && method === 'GET') {
+        const query = url.parse(req.url, true).query;
+        const substitutions = db.getSubstitutions(query.date, query.startDate, query.endDate);
+        res.writeHead(200, corsHeaders);
+        res.end(JSON.stringify(substitutions));
+        return;
+    }
+
+    if (pathname.startsWith('/api/substitutions/class/') && method === 'GET') {
+        const parts = pathname.split('/');
+        const classId = parts[parts.length - 2];
+        const date = parts[parts.length - 1];
+        const substitutions = db.getSubstitutionsByClass(classId, date);
+        res.writeHead(200, corsHeaders);
+        res.end(JSON.stringify(substitutions));
+        return;
+    }
+
+    if (pathname.startsWith('/api/substitutions/teacher/') && method === 'GET') {
+        const teacherId = pathname.split('/').pop();
+        const query = url.parse(req.url, true).query;
+        const substitutions = db.getSubstitutionsByTeacher(teacherId, query.startDate, query.endDate);
+        res.writeHead(200, corsHeaders);
+        res.end(JSON.stringify(substitutions));
+        return;
+    }
+
     // Védett API-k (szerkesztés) - jogosultság szükséges
     const editRoles = ['vezetoseg', 'rendszergaza', 'tanarok', 'irodistak'];
 
@@ -464,6 +492,63 @@ async function handleAPI(req, res, pathname) {
     }
 
     const canEdit = hasPermission(tokenData.groups, editRoles);
+
+    // Helyettesítés létrehozása
+    if (pathname === '/api/substitutions' && method === 'POST') {
+        if (!canEdit) {
+            res.writeHead(403, corsHeaders);
+            res.end(JSON.stringify({ error: 'Nincs jogosultságod helyettesítés létrehozásához' }));
+            return;
+        }
+        const data = await readBody(req);
+        data.created_by = tokenData.username;
+        try {
+            const id = db.addSubstitution(data);
+            res.writeHead(201, corsHeaders);
+            res.end(JSON.stringify({ success: true, id: id }));
+        } catch (e) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
+
+    if (pathname.startsWith('/api/substitutions/') && method === 'PUT') {
+        if (!canEdit) {
+            res.writeHead(403, corsHeaders);
+            res.end(JSON.stringify({ error: 'Nincs jogosultságod helyettesítés módosításához' }));
+            return;
+        }
+        const id = pathname.split('/').pop();
+        const data = await readBody(req);
+        try {
+            db.updateSubstitution(id, data);
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify({ success: true }));
+        } catch (e) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
+
+    if (pathname.startsWith('/api/substitutions/') && method === 'DELETE') {
+        if (!canEdit) {
+            res.writeHead(403, corsHeaders);
+            res.end(JSON.stringify({ error: 'Nincs jogosultságod helyettesítés törléséhez' }));
+            return;
+        }
+        const id = pathname.split('/').pop();
+        try {
+            db.deleteSubstitution(id);
+            res.writeHead(200, corsHeaders);
+            res.end(JSON.stringify({ success: true }));
+        } catch (e) {
+            res.writeHead(400, corsHeaders);
+            res.end(JSON.stringify({ error: e.message }));
+        }
+        return;
+    }
 
     // Órarend szerkesztése
     if (pathname === '/api/timetable' && method === 'POST') {

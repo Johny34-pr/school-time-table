@@ -57,8 +57,15 @@
                     <div class="user-details">
                         <span id="user-display" class="user-name">Felhasználó</span>
                         <span id="user-role" class="user-role">Vendég</span>
+                        <span id="linked-teacher-display" class="linked-teacher" style="display: none;">
+                            <i class="fas fa-chalkboard-teacher"></i>
+                            <span id="linked-teacher-name"></span>
+                        </span>
                     </div>
                 </div>
+                <button id="change-teacher-btn" class="change-teacher-btn" style="display: none;" title="Tanár váltás">
+                    <i class="fas fa-exchange-alt"></i>
+                </button>
                 <button id="logout-btn" class="logout-btn" title="Kijelentkezés">
                     <i class="fas fa-sign-out-alt"></i>
                 </button>
@@ -163,6 +170,9 @@
                 <button class="admin-tab-btn" data-admin-tab="periods">
                     <i class="fas fa-clock"></i> Csengetési rend
                 </button>
+                <button class="admin-tab-btn" data-admin-tab="substitutions">
+                    <i class="fas fa-exchange-alt"></i> Helyettesítések
+                </button>
             </div>
             <div class="admin-content">
                 <!-- Subjects Tab -->
@@ -226,6 +236,25 @@
                         </button>
                     </div>
                     <div id="periods-list" class="admin-list">
+                        <!-- Loaded dynamically -->
+                    </div>
+                </div>
+
+                <!-- Substitutions Tab -->
+                <div id="admin-substitutions" class="admin-tab-content">
+                    <div class="admin-header">
+                        <h3>Helyettesítések kezelése</h3>
+                        <div class="substitution-controls">
+                            <div class="date-picker-group">
+                                <label for="substitution-date-filter">Dátum:</label>
+                                <input type="date" id="substitution-date-filter" onchange="loadSubstitutions()">
+                            </div>
+                            <button class="add-btn" onclick="showSubstitutionModal()">
+                                <i class="fas fa-plus"></i> Új helyettesítés
+                            </button>
+                        </div>
+                    </div>
+                    <div id="substitutions-list" class="admin-list">
                         <!-- Loaded dynamically -->
                     </div>
                 </div>
@@ -335,9 +364,18 @@
                     <input type="text" id="teacher-name" required placeholder="pl. Kovács Mária">
                 </div>
                 
-                <div class="form-group">
-                    <label for="teacher-shortname">Rövidítés</label>
-                    <input type="text" id="teacher-shortname" placeholder="pl. KM">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="teacher-shortname">Rövidítés</label>
+                        <input type="text" id="teacher-shortname" placeholder="pl. KM">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="teacher-ldap">
+                            <i class="fas fa-user-tag"></i> LDAP felhasználónév
+                        </label>
+                        <input type="text" id="teacher-ldap" placeholder="pl. pzsildiko">
+                    </div>
                 </div>
                 
                 <div class="form-group">
@@ -345,15 +383,31 @@
                     <input type="email" id="teacher-email" placeholder="pl. kovacs.maria@iskola.hu">
                 </div>
                 
-                <div class="form-group">
-                    <label for="teacher-subjects">Tantárgyak</label>
-                    <input type="text" id="teacher-subjects" placeholder="pl. Matematika, Fizika">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Tantárgyak</label>
+                        <div id="teacher-subjects-list" class="checkbox-list">
+                            <!-- Loaded dynamically -->
+                        </div>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Osztályok</label>
+                        <div id="teacher-classes-list" class="checkbox-list">
+                            <!-- Loaded dynamically -->
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="form-group">
                     <label for="teacher-color">Szín</label>
                     <input type="color" id="teacher-color" value="#3498db">
                 </div>
+                
+                <p class="form-hint">
+                    <i class="fas fa-info-circle"></i> 
+                    Az LDAP felhasználónév kitöltésével a tanár automatikusan azonosítva lesz bejelentkezéskor.
+                </p>
                 
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" onclick="closeModal('teacher-modal')">Mégse</button>
@@ -505,8 +559,132 @@
         </div>
     </div>
 
+    <!-- Substitution Modal -->
+    <div id="substitution-modal" class="modal">
+        <div class="modal-content modal-lg">
+            <div class="modal-header">
+                <h3 id="substitution-modal-title">Új helyettesítés</h3>
+                <button class="close-btn" onclick="closeModal('substitution-modal')">&times;</button>
+            </div>
+            <form id="substitution-form">
+                <input type="hidden" id="substitution-id">
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="substitution-date">Dátum</label>
+                        <input type="date" id="substitution-date" required>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="substitution-period">Óra</label>
+                        <select id="substitution-period" required>
+                            <!-- Options loaded dynamically -->
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="substitution-class">Osztály</label>
+                    <select id="substitution-class" required>
+                        <!-- Options loaded dynamically -->
+                    </select>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="substitution-original-teacher">Eredeti tanár</label>
+                        <select id="substitution-original-teacher" required>
+                            <!-- Options loaded dynamically -->
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="substitution-substitute-teacher">Helyettesítő tanár</label>
+                        <select id="substitution-substitute-teacher">
+                            <option value="">-- Elmarad --</option>
+                            <!-- Options loaded dynamically -->
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="substitution-subject">Tantárgy</label>
+                        <select id="substitution-subject">
+                            <option value="">-- Eredeti --</option>
+                            <!-- Options loaded dynamically -->
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="substitution-room">Terem</label>
+                        <select id="substitution-room">
+                            <option value="">-- Eredeti --</option>
+                            <!-- Options loaded dynamically -->
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="substitution-reason">Indok</label>
+                    <input type="text" id="substitution-reason" placeholder="pl. Betegség, Tanfolyam, stb.">
+                </div>
+                
+                <div class="form-group">
+                    <label for="substitution-note">Megjegyzés</label>
+                    <input type="text" id="substitution-note" placeholder="Egyéb információ">
+                </div>
+                
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="substitution-cancelled">
+                        <span>Az óra elmarad (nincs helyettesítés)</span>
+                    </label>
+                </div>
+                
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('substitution-modal')">Mégse</button>
+                    <button type="button" id="delete-substitution-btn" class="btn btn-danger" style="display: none;" onclick="deleteSubstitution()">
+                        <i class="fas fa-trash"></i> Törlés
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Mentés
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Toast Container -->
     <div id="toast-container" class="toast-container"></div>
+
+    <!-- Teacher Select Modal (Tanár azonosítás) -->
+    <div id="teacher-select-modal" class="modal teacher-select-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-user-check"></i> Tanár azonosítás</h3>
+            </div>
+            <div class="modal-body">
+                <p class="teacher-select-info">
+                    <i class="fas fa-info-circle"></i>
+                    Válaszd ki a nevedet a listából, hogy csak a saját órarendedet lásd és szerkeszthesd.
+                </p>
+                <div class="teacher-select-search">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="teacher-select-search" placeholder="Keresés..." oninput="filterTeacherSelectList()">
+                </div>
+                <div id="teacher-select-list" class="teacher-select-list">
+                    <!-- Loaded dynamically -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <p class="teacher-select-note">
+                    <i class="fas fa-exclamation-triangle"></i>
+                    Ha nem találod a nevedet, kérd meg az adminisztrátort, hogy adja hozzá a rendszerhez.
+                </p>
+            </div>
+        </div>
+    </div>
 
     <script src="script.js"></script>
 </body>

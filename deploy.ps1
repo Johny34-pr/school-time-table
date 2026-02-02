@@ -1,22 +1,22 @@
 # ============================================
-# Iskolai Órarend - Deployment Script
-# Cél: root@10.204.131.131:/opt/school-timetable
+# Iskolai Orarend - Deployment Script
+# Cel: root@10.204.131.131:/opt/school-timetable
 # ============================================
 
 $ErrorActionPreference = "Stop"
 
-# Konfiguráció
+# Konfiguracio
 $SSH_HOST = "root@10.204.131.131"
 $REMOTE_PATH = "/opt/school-timetable"
 $LOCAL_PATH = $PSScriptRoot
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
-Write-Host "  Iskolai Órarend - Telepítés" -ForegroundColor Cyan
+Write-Host "  Iskolai Orarend - Telepites" -ForegroundColor Cyan
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
-# 1. Fájlok listája (node_modules és adatbázis nélkül)
+# 1. Fajlok listaja (node_modules es adatbazis nelkul)
 $filesToCopy = @(
     "index.html",
     "styles.css",
@@ -33,12 +33,12 @@ $serverFiles = @(
     "server/package.json"
 )
 
-# 2. Távoli mappa létrehozása
-Write-Host "[1/5] Távoli mappák létrehozása..." -ForegroundColor Yellow
+# 2. Tavoli mappa letrehozasa
+Write-Host "[1/5] Tavoli mappak letrehozasa..." -ForegroundColor Yellow
 ssh $SSH_HOST "mkdir -p $REMOTE_PATH/server"
 
-# 3. Fájlok feltöltése
-Write-Host "[2/5] Fájlok feltöltése..." -ForegroundColor Yellow
+# 3. Fajlok feltoltese
+Write-Host "[2/5] Fajlok feltoltese..." -ForegroundColor Yellow
 
 foreach ($file in $filesToCopy) {
     $localFile = Join-Path $LOCAL_PATH $file
@@ -56,29 +56,23 @@ foreach ($file in $serverFiles) {
     }
 }
 
-# 4. Régi konténer leállítása (ha fut)
-Write-Host "[3/5] Régi konténer leállítása..." -ForegroundColor Yellow
-ssh $SSH_HOST "cd $REMOTE_PATH && docker compose down 2>/dev/null || true"
+# 4. Regi kontener leallitasa (ha fut)
+Write-Host "[3/5] Regi kontener leallitasa..." -ForegroundColor Yellow
+ssh $SSH_HOST "cd $REMOTE_PATH; docker compose down 2>/dev/null; true"
 
-# 5. Docker image építése és indítása
-Write-Host "[4/5] Docker image építése és konténer indítása..." -ForegroundColor Yellow
-ssh $SSH_HOST "cd $REMOTE_PATH && docker compose up -d --build"
+# 5. Docker image epitese es inditasa
+Write-Host "[4/5] Docker image epitese es kontener inditasa..." -ForegroundColor Yellow
+ssh $SSH_HOST "cd $REMOTE_PATH; docker compose up -d --build"
 
-# 6. Státusz ellenőrzése
-Write-Host "[5/5] Státusz ellenőrzése..." -ForegroundColor Yellow
+# 6. Statusz ellenorzese
+Write-Host "[5/5] Statusz ellenorzese..." -ForegroundColor Yellow
 Start-Sleep -Seconds 3
 ssh $SSH_HOST "docker ps | grep school-timetable"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Green
-Write-Host "  Telepítés kész!" -ForegroundColor Green
+Write-Host "  Telepites kesz!" -ForegroundColor Green
 Write-Host "============================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Az alkalmazás elérhető:" -ForegroundColor Cyan
-Write-Host "  http://10.204.131.131:3001" -ForegroundColor White
-Write-Host ""
-Write-Host "Hasznos parancsok:" -ForegroundColor Cyan
-Write-Host "  Logok:    ssh $SSH_HOST 'docker logs -f school-timetable'" -ForegroundColor Gray
-Write-Host "  Restart:  ssh $SSH_HOST 'cd $REMOTE_PATH && docker-compose restart'" -ForegroundColor Gray
-Write-Host "  Stop:     ssh $SSH_HOST 'cd $REMOTE_PATH && docker-compose down'" -ForegroundColor Gray
+Write-Host "Az alkalmazas elerheto: http://10.204.131.131:3001" -ForegroundColor Cyan
 Write-Host ""

@@ -17,7 +17,12 @@ try {
 class TimetableDatabase {
     constructor() {
         if (Database) {
-            const dbPath = path.join(__dirname, 'timetable.db');
+            // Adatbázis a /data mappába kerül, hogy a Docker volume megőrizze
+            const dataDir = path.join(__dirname, 'data');
+            if (!require('fs').existsSync(dataDir)) {
+                require('fs').mkdirSync(dataDir, { recursive: true });
+            }
+            const dbPath = path.join(dataDir, 'timetable.db');
             this.db = new Database(dbPath);
             this.db.pragma('journal_mode = WAL');
         } else {
@@ -33,6 +38,7 @@ class TimetableDatabase {
             };
         }
         this.initTables();
+        this.migrateDatabase();
         this.seedData();
     }
 
@@ -57,6 +63,7 @@ class TimetableDatabase {
                 email TEXT,
                 subjects TEXT,
                 color TEXT DEFAULT '#3498db',
+                ldapUsername TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -109,7 +116,59 @@ class TimetableDatabase {
             CREATE INDEX IF NOT EXISTS idx_timetable_teacher ON timetable(teacherId);
             CREATE INDEX IF NOT EXISTS idx_timetable_room ON timetable(roomId);
             CREATE INDEX IF NOT EXISTS idx_timetable_day ON timetable(dayOfWeek);
+
+            CREATE TABLE IF NOT EXISTS substitutions (
+                id TEXT PRIMARY KEY,
+                date TEXT NOT NULL,
+                periodId TEXT NOT NULL,
+                classId TEXT NOT NULL,
+                originalTeacherId TEXT,
+                substituteTeacherId TEXT NOT NULL,
+                subjectId TEXT,
+                roomId TEXT,
+                reason TEXT,
+                note TEXT,
+                cancelled INTEGER DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT,
+                FOREIGN KEY (periodId) REFERENCES periods(id),
+                FOREIGN KEY (classId) REFERENCES classes(id),
+                FOREIGN KEY (originalTeacherId) REFERENCES teachers(id),
+                FOREIGN KEY (substituteTeacherId) REFERENCES teachers(id),
+                FOREIGN KEY (subjectId) REFERENCES subjects(id),
+                FOREIGN KEY (roomId) REFERENCES rooms(id)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_substitutions_date ON substitutions(date);
+            CREATE INDEX IF NOT EXISTS idx_substitutions_class ON substitutions(classId);
+            CREATE INDEX IF NOT EXISTS idx_substitutions_teacher ON substitutions(substituteTeacherId);
         `);
+    }
+
+    migrateDatabase() {
+        if (this.inMemory) return;
+
+        // Ellenőrizzük, hogy létezik-e az ldapUsername oszlop
+        try {
+            const tableInfo = this.db.prepare("PRAGMA table_info(teachers)").all();
+            const hasLdapUsername = tableInfo.some(col => col.name === 'ldapUsername');
+            
+            if (!hasLdapUsername) {
+                console.log('[DB] Migráció: ldapUsername oszlop hozzáadása a teachers táblához...');
+                this.db.exec('ALTER TABLE teachers ADD COLUMN ldapUsername TEXT');
+                console.log('[DB] Migráció sikeres!');
+            }
+            
+            // Ellenőrizzük, hogy létezik-e a classes oszlop
+            const hasClasses = tableInfo.some(col => col.name === 'classes');
+            if (!hasClasses) {
+                console.log('[DB] Migráció: classes oszlop hozzáadása a teachers táblához...');
+                this.db.exec('ALTER TABLE teachers ADD COLUMN classes TEXT');
+                console.log('[DB] Migráció sikeres!');
+            }
+        } catch (e) {
+            console.log('[DB] Migráció hiba:', e.message);
+        }
     }
 
     seedData() {
@@ -266,9 +325,9 @@ class TimetableDatabase {
             this.data.teachers.push({ id, ...data });
         } else {
             this.db.prepare(`
-                INSERT INTO teachers (id, name, shortName, email, subjects, color)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `).run(id, data.name, data.shortName, data.email, data.subjects, data.color);
+                INSERT INTO teachers (id, name, shortName, email, subjects, classes, color, ldapUsername)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(id, data.name, data.shortName, data.email, data.subjects, data.classes || null, data.color, data.ldapUsername || null);
         }
         return id;
     }
@@ -279,9 +338,9 @@ class TimetableDatabase {
             if (idx >= 0) this.data.teachers[idx] = { ...this.data.teachers[idx], ...data };
         } else {
             this.db.prepare(`
-                UPDATE teachers SET name = ?, shortName = ?, email = ?, subjects = ?, color = ?
+                UPDATE teachers SET name = ?, shortName = ?, email = ?, subjects = ?, classes = ?, color = ?, ldapUsername = ?
                 WHERE id = ?
-            `).run(data.name, data.shortName, data.email, data.subjects, data.color, id);
+            `).run(data.name, data.shortName, data.email, data.subjects, data.classes || null, data.color, data.ldapUsername || null, id);
         }
     }
 
@@ -593,6 +652,165 @@ class TimetableDatabase {
         }
 
         return null;
+    }
+
+    // =====================
+    // Helyettesítések CRUD
+    // =====================
+
+    getSubstitutions(date = null, startDate = null, endDate = null) {
+        if (this.inMemory) {
+            let subs = this.data.substitutions || [];
+            if (date) {
+                subs = subs.filter(s => s.date === date);
+            } else if (startDate && endDate) {
+                subs = subs.filter(s => s.date >= startDate && s.date <= endDate);
+            }
+            return subs;
+        }
+
+        let query = `
+            SELECT s.*,
+                   ot.name as originalTeacherName,
+                   ot.shortName as originalTeacherShortName,
+                   st.name as substituteTeacherName,
+                   st.shortName as substituteTeacherShortName,
+                   sub.name as subjectName,
+                   sub.shortName as subjectShortName,
+                   sub.color as subjectColor,
+                   c.name as className,
+                   r.name as roomName,
+                   p.number as periodNumber,
+                   p.startTime, p.endTime
+            FROM substitutions s
+            LEFT JOIN teachers ot ON s.originalTeacherId = ot.id
+            LEFT JOIN teachers st ON s.substituteTeacherId = st.id
+            LEFT JOIN subjects sub ON s.subjectId = sub.id
+            LEFT JOIN classes c ON s.classId = c.id
+            LEFT JOIN rooms r ON s.roomId = r.id
+            LEFT JOIN periods p ON s.periodId = p.id
+        `;
+
+        if (date) {
+            query += ' WHERE s.date = ?';
+            return this.db.prepare(query + ' ORDER BY p.number').all(date);
+        } else if (startDate && endDate) {
+            query += ' WHERE s.date >= ? AND s.date <= ?';
+            return this.db.prepare(query + ' ORDER BY s.date, p.number').all(startDate, endDate);
+        }
+
+        return this.db.prepare(query + ' ORDER BY s.date DESC, p.number').all();
+    }
+
+    getSubstitutionsByTeacher(teacherId, startDate = null, endDate = null) {
+        if (this.inMemory) {
+            let subs = (this.data.substitutions || []).filter(s => 
+                s.substituteTeacherId === teacherId || s.originalTeacherId === teacherId
+            );
+            if (startDate && endDate) {
+                subs = subs.filter(s => s.date >= startDate && s.date <= endDate);
+            }
+            return subs;
+        }
+
+        let query = `
+            SELECT s.*,
+                   ot.name as originalTeacherName,
+                   st.name as substituteTeacherName,
+                   sub.name as subjectName,
+                   sub.color as subjectColor,
+                   c.name as className,
+                   r.name as roomName,
+                   p.number as periodNumber,
+                   p.startTime, p.endTime
+            FROM substitutions s
+            LEFT JOIN teachers ot ON s.originalTeacherId = ot.id
+            LEFT JOIN teachers st ON s.substituteTeacherId = st.id
+            LEFT JOIN subjects sub ON s.subjectId = sub.id
+            LEFT JOIN classes c ON s.classId = c.id
+            LEFT JOIN rooms r ON s.roomId = r.id
+            LEFT JOIN periods p ON s.periodId = p.id
+            WHERE s.substituteTeacherId = ? OR s.originalTeacherId = ?
+        `;
+
+        const params = [teacherId, teacherId];
+        if (startDate && endDate) {
+            query += ' AND s.date >= ? AND s.date <= ?';
+            params.push(startDate, endDate);
+        }
+
+        return this.db.prepare(query + ' ORDER BY s.date, p.number').all(...params);
+    }
+
+    getSubstitutionsByClass(classId, date) {
+        if (this.inMemory) {
+            return (this.data.substitutions || []).filter(s => 
+                s.classId === classId && s.date === date
+            );
+        }
+
+        return this.db.prepare(`
+            SELECT s.*,
+                   ot.name as originalTeacherName,
+                   st.name as substituteTeacherName,
+                   st.shortName as substituteTeacherShortName,
+                   sub.name as subjectName,
+                   sub.shortName as subjectShortName,
+                   sub.color as subjectColor,
+                   r.name as roomName
+            FROM substitutions s
+            LEFT JOIN teachers ot ON s.originalTeacherId = ot.id
+            LEFT JOIN teachers st ON s.substituteTeacherId = st.id
+            LEFT JOIN subjects sub ON s.subjectId = sub.id
+            LEFT JOIN rooms r ON s.roomId = r.id
+            WHERE s.classId = ? AND s.date = ?
+        `).all(classId, date);
+    }
+
+    addSubstitution(data) {
+        const id = uuidv4();
+        if (this.inMemory) {
+            if (!this.data.substitutions) this.data.substitutions = [];
+            this.data.substitutions.push({ id, ...data });
+        } else {
+            this.db.prepare(`
+                INSERT INTO substitutions (id, date, periodId, classId, originalTeacherId, substituteTeacherId, subjectId, roomId, reason, note, cancelled, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).run(
+                id, data.date, data.periodId, data.classId, 
+                data.originalTeacherId, data.substituteTeacherId, 
+                data.subjectId, data.roomId, data.reason, data.note,
+                data.cancelled ? 1 : 0, data.created_by
+            );
+        }
+        return id;
+    }
+
+    updateSubstitution(id, data) {
+        if (this.inMemory) {
+            const idx = (this.data.substitutions || []).findIndex(s => s.id === id);
+            if (idx >= 0) this.data.substitutions[idx] = { ...this.data.substitutions[idx], ...data };
+        } else {
+            this.db.prepare(`
+                UPDATE substitutions 
+                SET date = ?, periodId = ?, classId = ?, originalTeacherId = ?, 
+                    substituteTeacherId = ?, subjectId = ?, roomId = ?, 
+                    reason = ?, note = ?, cancelled = ?
+                WHERE id = ?
+            `).run(
+                data.date, data.periodId, data.classId, data.originalTeacherId,
+                data.substituteTeacherId, data.subjectId, data.roomId,
+                data.reason, data.note, data.cancelled ? 1 : 0, id
+            );
+        }
+    }
+
+    deleteSubstitution(id) {
+        if (this.inMemory) {
+            this.data.substitutions = (this.data.substitutions || []).filter(s => s.id !== id);
+        } else {
+            this.db.prepare('DELETE FROM substitutions WHERE id = ?').run(id);
+        }
     }
 }
 
